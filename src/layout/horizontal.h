@@ -211,12 +211,13 @@ void horizontal_scroll_adjust_fullandmax(Client *c,
 }
 
 // 滚动布局
+// My implementation
 void scroller(Monitor *m) {
 	uint32_t i, n, j;
 	float single_proportion = 1.0;
 
 	Client *c = NULL, *root_client = NULL;
-	Client **tempClients = NULL; // 初始化为 NULL
+	Client **tempClients = NULL;
 	struct wlr_box target_geom;
 	int focus_client_index = 0;
 	bool need_scroller = false;
@@ -236,17 +237,14 @@ void scroller(Monitor *m) {
 	n = m->visible_scroll_tiling_clients;
 
 	if (n == 0) {
-		return; // 没有需要处理的客户端，直接返回
-	}
-
-	// 动态分配内存
-	tempClients = malloc(n * sizeof(Client *));
-	if (!tempClients) {
-		// 处理内存分配失败的情况
 		return;
 	}
 
-	// 第二次遍历，填充 tempClients
+	tempClients = malloc(n * sizeof(Client *));
+	if (!tempClients) {
+		return;
+	}
+
 	j = 0;
 	wl_list_for_each(c, &clients, link) {
 		if (VISIBLEON(c, m) && ISSCROLLTILED(c)) {
@@ -268,7 +266,7 @@ void scroller(Monitor *m) {
 		target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
 		target_geom.y = m->w.y + (m->w.height - target_geom.height) / 2;
 		resize(c, target_geom, 0);
-		free(tempClients); // 释放内存
+		free(tempClients);
 		return;
 	}
 
@@ -282,7 +280,7 @@ void scroller(Monitor *m) {
 	}
 
 	if (!root_client) {
-		free(tempClients); // 释放内存
+		free(tempClients);
 		return;
 	}
 
@@ -305,22 +303,89 @@ void scroller(Monitor *m) {
 		need_scroller = true;
 	}
 
-	if (start_drag_window)
+    if (start_drag_window)
 		need_scroller = false;
 
+	// NEW: Edge case detection - check if we're dealing with an edge closure
+	bool edge_closure_case = false;
+	
+	// Case 1: Client at left edge closed, leaving empty space
+	if (focus_client_index == 0 && root_client->geom.x > m->w.x + scroller_structs + 10) {
+		edge_closure_case = true;
+		need_scroller = true; // Force scrolling to eliminate empty space
+	}
+	
+	// Case 2: Client at right edge closed, leaving empty space  
+	if (focus_client_index == n - 1 && 
+		root_client->geom.x + root_client->geom.width < m->w.x + m->w.width - scroller_structs - 10) {
+		edge_closure_case = true;
+		need_scroller = true; // Force scrolling to eliminate empty space
+	}
+	
+	// Case 3: Middle client that's now at edge due to neighbor closure
+	if (focus_client_index > 0 && focus_client_index < n - 1) {
+		// Check if left neighbor is not visible (might have closed)
+		Client *left_neighbor = tempClients[focus_client_index - 1];
+		bool left_neighbor_visible = (left_neighbor->geom.x + left_neighbor->geom.width > m->w.x + scroller_structs);
+		
+		// Check if right neighbor is not visible (might have closed)
+		Client *right_neighbor = tempClients[focus_client_index + 1];
+		bool right_neighbor_visible = (right_neighbor->geom.x < m->w.x + m->w.width - scroller_structs);
+		
+		// If focused client is at viewport edge and neighbor isn't visible, it's an edge closure
+		if ((root_client->geom.x <= m->w.x + scroller_structs + 10 && !left_neighbor_visible) ||
+			(root_client->geom.x + root_client->geom.width >= m->w.x + m->w.width - scroller_structs - 10 && !right_neighbor_visible)) {
+			edge_closure_case = true;
+		}
+	}
+
 	target_geom.height = m->w.height - 2 * cur_gappov;
-	target_geom.width = max_client_width * c->scroller_proportion;
+	target_geom.width = max_client_width * root_client->scroller_proportion;
 	target_geom.y = m->w.y + (m->w.height - target_geom.height) / 2;
-	horizontal_scroll_adjust_fullandmax(tempClients[focus_client_index],
-										&target_geom);
-	if (tempClients[focus_client_index]->isfullscreen) {
+	horizontal_scroll_adjust_fullandmax(root_client, &target_geom);
+	
+	if (root_client->isfullscreen) {
 		target_geom.x = m->m.x;
-		resize(tempClients[focus_client_index], target_geom, 0);
-	} else if (tempClients[focus_client_index]->ismaximizescreen) {
+		resize(root_client, target_geom, 0);
+	} else if (root_client->ismaximizescreen) {
 		target_geom.x = m->w.x + cur_gappoh;
-		resize(tempClients[focus_client_index], target_geom, 0);
+		resize(root_client, target_geom, 0);
 	} else if (need_scroller) {
-		if (scroller_focus_center ||
+		// NEW: Modified logic for edge closure cases
+		if (edge_closure_case && !scroller_focus_center) {
+			// For edge closures, position to eliminate empty space
+			if (focus_client_index == 0) {
+				// Left edge closure: move to left edge
+				target_geom.x = m->w.x + scroller_structs;
+			} else if (focus_client_index == n - 1) {
+				// Right edge closure: move to right edge
+				target_geom.x = m->w.x + m->w.width - scroller_structs - target_geom.width;
+			} else {
+				// Middle client at edge due to neighbor closure
+				// Try to show with the other neighbor
+				if (root_client->geom.x <= m->w.x + scroller_structs + 10) {
+					// At left edge, try to show with right neighbor
+					float right_neighbor_width = max_client_width * tempClients[focus_client_index + 1]->scroller_proportion;
+					if (target_geom.width + right_neighbor_width + cur_gappih <= m->w.width - 2 * scroller_structs) {
+						// Can show with right neighbor, stay at left
+						target_geom.x = m->w.x + scroller_structs;
+					} else {
+						// Can't show both, center it
+						target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
+					}
+				} else {
+					// At right edge, try to show with left neighbor
+					float left_neighbor_width = max_client_width * tempClients[focus_client_index - 1]->scroller_proportion;
+					if (target_geom.width + left_neighbor_width + cur_gappih <= m->w.width - 2 * scroller_structs) {
+						// Can show with left neighbor, position accordingly
+						target_geom.x = m->w.x + m->w.width - scroller_structs - target_geom.width;
+					} else {
+						// Can't show both, center it
+						target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
+					}
+				}
+			}
+		} else if (scroller_focus_center ||
 			((!m->prevsel ||
 			  (ISSCROLLTILED(m->prevsel) &&
 			   (m->prevsel->scroller_proportion * max_client_width) +
@@ -336,12 +401,13 @@ void scroller(Monitor *m) {
 											scroller_structs)
 								: m->w.x + scroller_structs;
 		}
-		resize(tempClients[focus_client_index], target_geom, 0);
+		resize(root_client, target_geom, 0);
 	} else {
-		target_geom.x = c->geom.x;
-		resize(tempClients[focus_client_index], target_geom, 0);
+		target_geom.x = root_client->geom.x;
+		resize(root_client, target_geom, 0);
 	}
 
+	// Position clients to the left of focus
 	for (i = 1; i <= focus_client_index; i++) {
 		c = tempClients[focus_client_index - i];
 		target_geom.width = max_client_width * c->scroller_proportion;
@@ -352,6 +418,7 @@ void scroller(Monitor *m) {
 		resize(c, target_geom, 0);
 	}
 
+	// Position clients to the right of focus
 	for (i = 1; i < n - focus_client_index; i++) {
 		c = tempClients[focus_client_index + i];
 		target_geom.width = max_client_width * c->scroller_proportion;
@@ -362,8 +429,13 @@ void scroller(Monitor *m) {
 		resize(c, target_geom, 0);
 	}
 
-	free(tempClients); // 最后释放内存
+	free(tempClients);
 }
+
+
+
+//stops here
+
 
 void center_tile(Monitor *m) {
 	uint32_t i, n = 0, h, r, ie = enablegaps, mw, mx, my, oty, ety, tw;
