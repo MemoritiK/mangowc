@@ -364,6 +364,7 @@ struct Client {
 	int isglobal;
 	int isnoborder;
 	int isnoshadow;
+	int isnoradius;
 	int isnoanimation;
 	int isopensilent;
 	int istagsilent;
@@ -1214,6 +1215,7 @@ static void apply_rule_properties(Client *c, const ConfigWinRule *r) {
 	APPLY_INT_PROP(c, r, isfullscreen);
 	APPLY_INT_PROP(c, r, isnoborder);
 	APPLY_INT_PROP(c, r, isnoshadow);
+	APPLY_INT_PROP(c, r, isnoradius);
 	APPLY_INT_PROP(c, r, isnoanimation);
 	APPLY_INT_PROP(c, r, isopensilent);
 	APPLY_INT_PROP(c, r, istagsilent);
@@ -1393,7 +1395,11 @@ void applyrules(Client *c) {
 	// if no geom rule hit and is normal winodw, use the center pos and record
 	// the hit size
 	if (!hit_rule_pos && !client_is_x11(c)) {
+	if (!hit_rule_pos &&
+		(!client_is_x11(c) || (c->geom.x == 0 && c->geom.y == 0))) {
 		c->float_geom = c->geom = setclient_coordinate_center(c, c->geom, 0, 0);
+	} else {
+		c->float_geom = c->geom;
 	}
 
 	/*-----------------------apply rule action-------------------------*/
@@ -3718,6 +3724,8 @@ void init_client_properties(Client *c) {
 	c->no_force_center = 0;
 	c->isnoborder = 0;
 	c->isnosizehint = 0;
+	c->isnoradius = 0;
+	c->isnoshadow = 0;
 	c->ignore_maximize = 1;
 	c->ignore_minimize = 1;
 	c->iscustomsize = 0;
@@ -4032,7 +4040,11 @@ void motionnotify(uint32_t time, struct wlr_input_device *device, double dx,
 				.y = grabc->geom.y,
 				.width = (int)round(cursor->x) - grabc->geom.x,
 				.height = (int)round(cursor->y) - grabc->geom.y};
-			resize(grabc, grabc->float_geom, 1);
+			if (last_apply_drap_time == 0 ||
+				time - last_apply_drap_time > drag_refresh_interval) {
+				resize(grabc, grabc->float_geom, 1);
+				last_apply_drap_time = time;
+			}
 			return;
 		} else {
 			resize_tile_client(grabc, true, 0, 0, time);
@@ -4516,7 +4528,11 @@ setfloating(Client *c, int floating) {
 		}
 
 		// 重新计算居中的坐标
+<<<<<<< HEAD
 		if (!client_is_x11(c))
+=======
+		if (!client_is_x11(c) || (c->geom.x == 0 && c->geom.y == 0))
+>>>>>>> upstream/main
 			target_box = setclient_coordinate_center(c, target_box, 0, 0);
 		backup_box = c->geom;
 		hit = applyrulesgeom(c);
