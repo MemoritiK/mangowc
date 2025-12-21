@@ -27,3 +27,28 @@ jobs:
 
       - name: Push main
         run: git push origin main
+        
+      - name: Checkout feature branch
+        run: git checkout scroller-fix
+
+      - name: Rebase feature branch onto main
+        id: rebase_feature
+        run: |
+          if ! git rebase main; then
+            echo "merge_conflict_feature=true" >> $GITHUB_ENV
+            echo "Conflict in feature branch"
+          fi
+
+      - name: Push feature branch
+        if: env.merge_conflict_feature != 'true'
+        run: git push origin feature-branch --force
+
+      - name: Create issue if conflicts
+        if: env.merge_conflict_main == 'true' || env.merge_conflict_feature == 'true'
+        uses: peter-evans/create-issue-from-file@v6
+        with:
+          title: '⚠ Merge Conflict Detected'
+          content: |
+            Conflicts were detected during automatic sync:
+            - Main branch: ${{ env.merge_conflict_main }}
+            - Feature branch: ${{ env.merge_conflict_feature }}
