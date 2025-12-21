@@ -48,7 +48,3 @@ jobs:
         uses: peter-evans/create-issue-from-file@v6
         with:
           title: '⚠ Merge Conflict Detected'
-          content: |
-            Conflicts were detected during automatic sync:
-            - Main branch: ${{ env.merge_conflict_main }}
-            - Feature branch: ${{ env.merge_conflict_feature }}
