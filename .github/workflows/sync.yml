@@ -2,49 +2,60 @@ name: Sync Fork Main
 
 on:
   schedule:
-    - cron: '0 */5 * * *' # every 5 hour
+    - cron: '0 */5 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   sync-main:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout main
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Add upstream remote
-        run: git remote add upstream https://github.com/DreamMaoMao/mangowc
-
-      - name: Fetch upstream
-        run: git fetch upstream
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/DreamMaoMao/mangowc.git
+          git fetch upstream
 
       - name: Merge upstream into main
         run: |
-          git merge upstream/main -m "Sync with upstream" || echo "Merge conflict detected"
+          set -e
+          if ! git merge upstream/main -m "Sync with upstream"; then
+            echo "merge_conflict_main=true" >> $GITHUB_ENV
+            exit 0
+          fi
 
       - name: Push main
+        if: env.merge_conflict_main != 'true'
         run: git push origin main
-        
+
       - name: Checkout feature branch
         run: git checkout scroller-fix
 
       - name: Rebase feature branch onto main
-        id: rebase_feature
         run: |
+          set -e
           if ! git rebase main; then
             echo "merge_conflict_feature=true" >> $GITHUB_ENV
-            echo "Conflict in feature branch"
+            exit 0
           fi
 
       - name: Push feature branch
         if: env.merge_conflict_feature != 'true'
-        run: git push origin feature-branch --force
+        run: git push origin scroller-fix --force
 
       - name: Create issue if conflicts
         if: env.merge_conflict_main == 'true' || env.merge_conflict_feature == 'true'
         uses: peter-evans/create-issue-from-file@v6
         with:
-          title: '⚠ Merge Conflict Detected'
+          title: "⚠ Merge Conflict Detected"
+          content-filepath: .github/conflict.md
