@@ -1397,7 +1397,7 @@ void applyrules(Client *c) {
 	// if no geom rule hit and is normal winodw, use the center pos and record
 	// the hit size
 	if (!hit_rule_pos &&
-		(!client_is_x11(c) || (c->geom.x == 0 && c->geom.y == 0))) {
+		(!client_is_x11(c) ||!client_is_x11_popup(c))) {
 		c->float_geom = c->geom = setclient_coordinate_center(c, c->geom, 0, 0);
 	} else {
 		c->float_geom = c->geom;
@@ -4568,7 +4568,7 @@ setfloating(Client *c, int floating) {
 		}
 
 		// 重新计算居中的坐标
-		if (!client_is_x11(c) || (c->geom.x == 0 && c->geom.y == 0))
+		if (!client_is_x11(c) || !client_is_x11_popup(c))
 			target_box = setclient_coordinate_center(c, target_box, 0, 0);
 		backup_box = c->geom;
 		hit = applyrulesgeom(c);
