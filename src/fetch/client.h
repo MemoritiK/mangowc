@@ -83,7 +83,7 @@ setclient_coordinate_center(Client *c, struct wlr_box geom, int offsetx,
 
 	uint32_t cbw = check_hit_no_border(c) ? c->bw : 0;
 
-	if (!c->no_force_center) {
+	if (!c->no_force_center && m) {
 		tempbox.x = m->w.x + (m->w.width - geom.width) / 2;
 		tempbox.y = m->w.y + (m->w.height - geom.height) / 2;
 	} else {
@@ -396,6 +396,9 @@ Client *get_next_stack_client(Client *c, bool reverse) {
 			if (&next->link == &clients)
 				continue; /* wrap past the sentinel node */
 
+			if (next->isunglobal)
+				continue;
+
 			if (next != c && next->mon && VISIBLEON(next, c->mon))
 				return next;
 		}
@@ -403,6 +406,9 @@ Client *get_next_stack_client(Client *c, bool reverse) {
 		wl_list_for_each(next, &c->link, link) {
 			if (&next->link == &clients)
 				continue; /* wrap past the sentinel node */
+
+			if (next->isunglobal)
+				continue;
 
 			if (next != c && next->mon && VISIBLEON(next, c->mon))
 				return next;
