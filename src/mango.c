@@ -2350,6 +2350,11 @@ void commitlayersurfacenotify(struct wl_listener *listener, void *data) {
 		wlr_scene_node_set_enabled(&l->scene->node, true);
 	}
 
+	if (layer_surface->current.committed == 0 &&
+		l->mapped == layer_surface->surface->mapped)
+		return;
+	l->mapped = layer_surface->surface->mapped;
+
 	get_layer_target_geometry(l, &box);
 
 	if (animations && layer_animations && !l->noanim && l->mapped &&
@@ -2394,11 +2399,6 @@ void commitlayersurfacenotify(struct wl_listener *listener, void *data) {
 		layer_surface->current.keyboard_interactive !=
 			ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)
 		exclusive_focus = NULL;
-
-	if (layer_surface->current.committed == 0 &&
-		l->mapped == layer_surface->surface->mapped)
-		return;
-	l->mapped = layer_surface->surface->mapped;
 
 	if (scene_layer != l->scene->node.parent) {
 		wlr_scene_node_reparent(&l->scene->node, scene_layer);
