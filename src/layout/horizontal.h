@@ -278,7 +278,7 @@ void scroller(Monitor *m) {
 	int32_t i, n, j;
 	float single_proportion = 1.0;
 
-	Client *c = NULL, *root_client = NULL;
+	Client *c = NULL, *root_client = NULL, *root_stack_head = NULL;
 	Client **tempClients = NULL;
 	struct wlr_box target_geom;
 	int32_t focus_client_index = 0;
@@ -334,6 +334,7 @@ void scroller(Monitor *m) {
 		return;
 	}
 
+	// Get the focused client
 	if (m->sel && !client_is_unmanaged(m->sel) && ISSCROLLTILED(m->sel)) {
 		root_client = m->sel;
 	} else if (m->prevsel && ISSCROLLTILED(m->prevsel) &&
@@ -343,19 +344,19 @@ void scroller(Monitor *m) {
 		root_client = center_tiled_select(m);
 	}
 
-	// root_client might be in a stack, find the stack head
-	if (root_client) {
-		root_client = get_scroll_stack_head(root_client);
-	}
-
 	if (!root_client) {
 		free(tempClients);
 		return;
 	}
 
+	// Get the stack head for this client
+	root_stack_head = get_scroll_stack_head(root_client);
+
+	// Find the index of the stack head in tempClients
 	for (i = 0; i < n; i++) {
 		c = tempClients[i];
-		if (root_client == c) {
+		if (root_stack_head == c) {
+			// Check if the stack head is fully visible
 			if (c->geom.x >= m->w.x + scroller_structs &&
 				c->geom.x + c->geom.width <=
 					m->w.x + m->w.width - scroller_structs) {
@@ -372,22 +373,22 @@ void scroller(Monitor *m) {
 		need_scroller = true;
 	}
 
-	// === EDGE CASE DETECTION ===
+	// ===== NEW: Edge case detection (using stack head, not individual client) =====
 	bool edge_closure_case = false;
 	bool focus_at_left_edge = false;
 	bool focus_at_right_edge = false;
 	
-	// Check if focused stack is at edge with empty space
+	// Check if stack head is at edge with empty space
 	if (focus_client_index == 0) {
 		// First stack - check if it's not at left edge
-		if (root_client->geom.x > m->w.x + scroller_structs + 10) {
+		if (root_stack_head->geom.x > m->w.x + scroller_structs + 10) {
 			edge_closure_case = true;
 			focus_at_left_edge = true;
 			need_scroller = true;
 		}
 	} else if (focus_client_index == n - 1) {
 		// Last stack - check if it's not at right edge
-		if (root_client->geom.x + root_client->geom.width < 
+		if (root_stack_head->geom.x + root_stack_head->geom.width < 
 			m->w.x + m->w.width - scroller_structs - 10) {
 			edge_closure_case = true;
 			focus_at_right_edge = true;
@@ -410,11 +411,11 @@ void scroller(Monitor *m) {
 									m->w.x + m->w.width - scroller_structs - 5);
 		}
 		
-		// Check if focused stack is at viewport edge but neighbor isn't visible
-		if (root_client->geom.x <= m->w.x + scroller_structs + 10 && !left_neighbor_visible) {
+		// Check if stack head is at viewport edge but neighbor isn't visible
+		if (root_stack_head->geom.x <= m->w.x + scroller_structs + 10 && !left_neighbor_visible) {
 			edge_closure_case = true;
 			focus_at_left_edge = true;
-		} else if (root_client->geom.x + root_client->geom.width >= 
+		} else if (root_stack_head->geom.x + root_stack_head->geom.width >= 
 				  m->w.x + m->w.width - scroller_structs - 10 && !right_neighbor_visible) {
 			edge_closure_case = true;
 			focus_at_right_edge = true;
@@ -429,26 +430,28 @@ void scroller(Monitor *m) {
 			}
 		}
 	}
-	// === END EDGE CASE DETECTION ===
+	// ===== END Edge case detection =====
 
 	if (start_drag_window)
 		need_scroller = false;
 
+	// Position the stack head (root_stack_head, not root_client)
+	c = tempClients[focus_client_index]; // This is the stack head
 	target_geom.height = m->w.height - 2 * cur_gappov;
-	target_geom.width = max_client_width * root_client->scroller_proportion;
+	target_geom.width = max_client_width * c->scroller_proportion;
 	target_geom.y = m->w.y + (m->w.height - target_geom.height) / 2;
-	horizontal_scroll_adjust_fullandmax(root_client, &target_geom);
+	horizontal_scroll_adjust_fullandmax(c, &target_geom);
 	
-	if (root_client->isfullscreen) {
+	if (c->isfullscreen) {
 		target_geom.x = m->m.x;
-		horizontal_check_scroller_root_inside_mon(root_client, &target_geom);
-		arrange_stack(root_client, target_geom, cur_gappiv);
-	} else if (root_client->ismaximizescreen) {
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
+	} else if (c->ismaximizescreen) {
 		target_geom.x = m->w.x + cur_gappoh;
-		horizontal_check_scroller_root_inside_mon(root_client, &target_geom);
-		arrange_stack(root_client, target_geom, cur_gappiv);
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
 	} else if (need_scroller) {
-		// === MODIFIED POSITIONING LOGIC ===
+		// ===== MODIFIED: Handle edge closure cases =====
 		if (edge_closure_case && !scroller_focus_center) {
 			// Edge closure - position to eliminate empty space
 			if (focus_at_left_edge) {
@@ -463,14 +466,14 @@ void scroller(Monitor *m) {
 					((!m->prevsel ||
 					  (ISSCROLLTILED(m->prevsel) &&
 					   (m->prevsel->scroller_proportion * max_client_width) +
-							   (root_client->scroller_proportion * max_client_width) >
+							   (c->scroller_proportion * max_client_width) >
 						   m->w.width - 2 * scroller_structs - cur_gappih)) &&
 					 scroller_prefer_center)) {
 					target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
 				} else {
-					target_geom.x = root_client->geom.x > m->w.x + (m->w.width) / 2
+					target_geom.x = c->geom.x > m->w.x + (m->w.width) / 2
 										? m->w.x + (m->w.width -
-													root_client->scroller_proportion *
+													c->scroller_proportion *
 														max_client_width -
 													scroller_structs)
 										: m->w.x + scroller_structs;
@@ -480,28 +483,29 @@ void scroller(Monitor *m) {
 			((!m->prevsel ||
 			  (ISSCROLLTILED(m->prevsel) &&
 			   (m->prevsel->scroller_proportion * max_client_width) +
-					   (root_client->scroller_proportion * max_client_width) >
+					   (c->scroller_proportion * max_client_width) >
 				   m->w.width - 2 * scroller_structs - cur_gappih)) &&
 			 scroller_prefer_center)) {
 			target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
 		} else {
-			target_geom.x = root_client->geom.x > m->w.x + (m->w.width) / 2
+			target_geom.x = c->geom.x > m->w.x + (m->w.width) / 2
 								? m->w.x + (m->w.width -
-											root_client->scroller_proportion *
+											c->scroller_proportion *
 												max_client_width -
 											scroller_structs)
 								: m->w.x + scroller_structs;
 		}
-		// === END MODIFIED POSITIONING ===
+		// ===== END MODIFIED =====
 		
-		horizontal_check_scroller_root_inside_mon(root_client, &target_geom);
-		arrange_stack(root_client, target_geom, cur_gappiv);
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
 	} else {
-		target_geom.x = root_client->geom.x;
-		horizontal_check_scroller_root_inside_mon(root_client, &target_geom);
-		arrange_stack(root_client, target_geom, cur_gappiv);
+		target_geom.x = c->geom.x;
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
 	}
 
+	// Position stacks to the left of focus
 	for (i = 1; i <= focus_client_index; i++) {
 		c = tempClients[focus_client_index - i];
 		target_geom.width = max_client_width * c->scroller_proportion;
@@ -512,6 +516,7 @@ void scroller(Monitor *m) {
 		arrange_stack(c, target_geom, cur_gappiv);
 	}
 
+	// Position stacks to the right of focus
 	for (i = 1; i < n - focus_client_index; i++) {
 		c = tempClients[focus_client_index + i];
 		target_geom.width = max_client_width * c->scroller_proportion;
