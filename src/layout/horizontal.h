@@ -278,8 +278,8 @@ void scroller(Monitor *m) {
 	int32_t i, n, j;
 	float single_proportion = 1.0;
 
-	Client *c = NULL, *root_client = NULL;
-	Client **tempClients = NULL; // 初始化为 NULL
+	Client *c = NULL, *root_client = NULL, *root_stack_head = NULL;
+	Client **tempClients = NULL;
 	struct wlr_box target_geom;
 	int32_t focus_client_index = 0;
 	bool need_scroller = false;
@@ -300,17 +300,14 @@ void scroller(Monitor *m) {
 	n = m->visible_scroll_tiling_clients;
 
 	if (n == 0) {
-		return; // 没有需要处理的客户端，直接返回
-	}
-
-	// 动态分配内存
-	tempClients = malloc(n * sizeof(Client *));
-	if (!tempClients) {
-		// 处理内存分配失败的情况
 		return;
 	}
 
-	// 第二次遍历，填充 tempClients
+	tempClients = malloc(n * sizeof(Client *));
+	if (!tempClients) {
+		return;
+	}
+
 	j = 0;
 	wl_list_for_each(c, &clients, link) {
 		if (VISIBLEON(c, m) && ISSCROLLTILED(c) && !c->prev_in_stack) {
@@ -333,10 +330,11 @@ void scroller(Monitor *m) {
 		target_geom.y = m->w.y + (m->w.height - target_geom.height) / 2;
 		horizontal_check_scroller_root_inside_mon(c, &target_geom);
 		arrange_stack(c, target_geom, cur_gappiv);
-		free(tempClients); // 释放内存
+		free(tempClients);
 		return;
 	}
 
+	// Get the focused client
 	if (m->sel && !client_is_unmanaged(m->sel) && ISSCROLLTILED(m->sel)) {
 		root_client = m->sel;
 	} else if (m->prevsel && ISSCROLLTILED(m->prevsel) &&
@@ -346,19 +344,19 @@ void scroller(Monitor *m) {
 		root_client = center_tiled_select(m);
 	}
 
-	// root_client might be in a stack, find the stack head
-	if (root_client) {
-		root_client = get_scroll_stack_head(root_client);
-	}
-
 	if (!root_client) {
-		free(tempClients); // 释放内存
+		free(tempClients);
 		return;
 	}
 
+	// Get the stack head for this client
+	root_stack_head = get_scroll_stack_head(root_client);
+
+	// Find the index of the stack head in tempClients
 	for (i = 0; i < n; i++) {
 		c = tempClients[i];
-		if (root_client == c) {
+		if (root_stack_head == c) {
+			// Check if the stack head is fully visible
 			if (c->geom.x >= m->w.x + scroller_structs &&
 				c->geom.x + c->geom.width <=
 					m->w.x + m->w.width - scroller_structs) {
@@ -375,51 +373,139 @@ void scroller(Monitor *m) {
 		need_scroller = true;
 	}
 
+	// ===== NEW: Edge case detection (using stack head, not individual client) =====
+	bool edge_closure_case = false;
+	bool focus_at_left_edge = false;
+	bool focus_at_right_edge = false;
+	
+	// Check if stack head is at edge with empty space
+	if (focus_client_index == 0) {
+		// First stack - check if it's not at left edge
+		if (root_stack_head->geom.x > m->w.x + scroller_structs + 10) {
+			edge_closure_case = true;
+			focus_at_left_edge = true;
+			need_scroller = true;
+		}
+	} else if (focus_client_index == n - 1) {
+		// Last stack - check if it's not at right edge
+		if (root_stack_head->geom.x + root_stack_head->geom.width < 
+			m->w.x + m->w.width - scroller_structs - 10) {
+			edge_closure_case = true;
+			focus_at_right_edge = true;
+			need_scroller = true;
+		}
+	} else {
+		// Middle stack - check if it's at viewport edge with neighbor not visible
+		bool left_neighbor_visible = false;
+		bool right_neighbor_visible = false;
+		
+		if (focus_client_index > 0) {
+			Client *left_neighbor = tempClients[focus_client_index - 1];
+			left_neighbor_visible = (left_neighbor->geom.x + left_neighbor->geom.width > 
+								   m->w.x + scroller_structs + 5);
+		}
+		
+		if (focus_client_index < n - 1) {
+			Client *right_neighbor = tempClients[focus_client_index + 1];
+			right_neighbor_visible = (right_neighbor->geom.x < 
+									m->w.x + m->w.width - scroller_structs - 5);
+		}
+		
+		// Check if stack head is at viewport edge but neighbor isn't visible
+		if (root_stack_head->geom.x <= m->w.x + scroller_structs + 10 && !left_neighbor_visible) {
+			edge_closure_case = true;
+			focus_at_left_edge = true;
+		} else if (root_stack_head->geom.x + root_stack_head->geom.width >= 
+				  m->w.x + m->w.width - scroller_structs - 10 && !right_neighbor_visible) {
+			edge_closure_case = true;
+			focus_at_right_edge = true;
+		}
+		
+		// Special case: Focusing on middle stack when neighbors are visible
+		// Don't scroll if both neighbors are already visible
+		if (!edge_closure_case && focus_client_index > 0 && focus_client_index < n - 1) {
+			if (left_neighbor_visible && right_neighbor_visible) {
+				// Don't scroll - keep both neighbors visible
+				need_scroller = false;
+			}
+		}
+	}
+	// ===== END Edge case detection =====
+
 	if (start_drag_window)
 		need_scroller = false;
 
+	// Position the stack head (root_stack_head, not root_client)
+	c = tempClients[focus_client_index]; // This is the stack head
 	target_geom.height = m->w.height - 2 * cur_gappov;
 	target_geom.width = max_client_width * c->scroller_proportion;
 	target_geom.y = m->w.y + (m->w.height - target_geom.height) / 2;
-	horizontal_scroll_adjust_fullandmax(tempClients[focus_client_index],
-										&target_geom);
-	if (tempClients[focus_client_index]->isfullscreen) {
+	horizontal_scroll_adjust_fullandmax(c, &target_geom);
+	
+	if (c->isfullscreen) {
 		target_geom.x = m->m.x;
-		horizontal_check_scroller_root_inside_mon(
-			tempClients[focus_client_index], &target_geom);
-		arrange_stack(tempClients[focus_client_index], target_geom, cur_gappiv);
-	} else if (tempClients[focus_client_index]->ismaximizescreen) {
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
+	} else if (c->ismaximizescreen) {
 		target_geom.x = m->w.x + cur_gappoh;
-		horizontal_check_scroller_root_inside_mon(
-			tempClients[focus_client_index], &target_geom);
-		arrange_stack(tempClients[focus_client_index], target_geom, cur_gappiv);
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
 	} else if (need_scroller) {
-		if (scroller_focus_center ||
+		// ===== MODIFIED: Handle edge closure cases =====
+		if (edge_closure_case && !scroller_focus_center) {
+			// Edge closure - position to eliminate empty space
+			if (focus_at_left_edge) {
+				// Move to left edge to show right neighbor
+				target_geom.x = m->w.x + scroller_structs;
+			} else if (focus_at_right_edge) {
+				// Move to right edge to show left neighbor
+				target_geom.x = m->w.x + m->w.width - scroller_structs - target_geom.width;
+			} else {
+				// Use original logic for other cases
+				if (scroller_focus_center ||
+					((!m->prevsel ||
+					  (ISSCROLLTILED(m->prevsel) &&
+					   (m->prevsel->scroller_proportion * max_client_width) +
+							   (c->scroller_proportion * max_client_width) >
+						   m->w.width - 2 * scroller_structs - cur_gappih)) &&
+					 scroller_prefer_center)) {
+					target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
+				} else {
+					target_geom.x = c->geom.x > m->w.x + (m->w.width) / 2
+										? m->w.x + (m->w.width -
+													c->scroller_proportion *
+														max_client_width -
+													scroller_structs)
+										: m->w.x + scroller_structs;
+				}
+			}
+		} else if (scroller_focus_center ||
 			((!m->prevsel ||
 			  (ISSCROLLTILED(m->prevsel) &&
 			   (m->prevsel->scroller_proportion * max_client_width) +
-					   (root_client->scroller_proportion * max_client_width) >
+					   (c->scroller_proportion * max_client_width) >
 				   m->w.width - 2 * scroller_structs - cur_gappih)) &&
 			 scroller_prefer_center)) {
 			target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
 		} else {
-			target_geom.x = root_client->geom.x > m->w.x + (m->w.width) / 2
+			target_geom.x = c->geom.x > m->w.x + (m->w.width) / 2
 								? m->w.x + (m->w.width -
-											root_client->scroller_proportion *
+											c->scroller_proportion *
 												max_client_width -
 											scroller_structs)
 								: m->w.x + scroller_structs;
 		}
-		horizontal_check_scroller_root_inside_mon(
-			tempClients[focus_client_index], &target_geom);
-		arrange_stack(tempClients[focus_client_index], target_geom, cur_gappiv);
+		// ===== END MODIFIED =====
+		
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
 	} else {
 		target_geom.x = c->geom.x;
-		horizontal_check_scroller_root_inside_mon(
-			tempClients[focus_client_index], &target_geom);
-		arrange_stack(tempClients[focus_client_index], target_geom, cur_gappiv);
+		horizontal_check_scroller_root_inside_mon(c, &target_geom);
+		arrange_stack(c, target_geom, cur_gappiv);
 	}
 
+	// Position stacks to the left of focus
 	for (i = 1; i <= focus_client_index; i++) {
 		c = tempClients[focus_client_index - i];
 		target_geom.width = max_client_width * c->scroller_proportion;
@@ -430,6 +516,7 @@ void scroller(Monitor *m) {
 		arrange_stack(c, target_geom, cur_gappiv);
 	}
 
+	// Position stacks to the right of focus
 	for (i = 1; i < n - focus_client_index; i++) {
 		c = tempClients[focus_client_index + i];
 		target_geom.width = max_client_width * c->scroller_proportion;
@@ -440,7 +527,7 @@ void scroller(Monitor *m) {
 		arrange_stack(c, target_geom, cur_gappiv);
 	}
 
-	free(tempClients); // 最后释放内存
+	free(tempClients);
 }
 
 void center_tile(Monitor *m) {
