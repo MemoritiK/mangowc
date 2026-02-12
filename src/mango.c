@@ -4322,7 +4322,7 @@ void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 				  uint32_t time) {
 	struct timespec now;
 
-	if (sloppyfocus && !start_drag_window && c && time &&
+	if (sloppyfocus && !start_drag_window && c && time && c->scene &&
 		c->scene->node.enabled && !c->animation.tagining &&
 		(surface != seat->pointer_state.focused_surface) &&
 		!client_is_unmanaged(c) && VISIBLEON(c, c->mon))
@@ -6058,8 +6058,9 @@ void virtualpointer(struct wl_listener *listener, void *data) {
 int32_t synckeymap(void *data) {
 	reset_keyboard_layout();
 	// we only need to sync keymap once
+	wlr_log(WLR_INFO, "timer to synckeymap done");
 	wl_event_source_timer_update(sync_keymap, 0);
-	return 1;
+	return 0;
 }
 
 void activatex11(struct wl_listener *listener, void *data) {
