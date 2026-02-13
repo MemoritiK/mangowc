@@ -514,6 +514,8 @@ struct Monitor {
 	int32_t gappoh; /* horizontal outer gaps */
 	int32_t gappov; /* vertical outer gaps */
 	Pertag *pertag;
+	uint32_t ovbk_current_tagset;
+	uint32_t ovbk_prev_tagset;
 	Client *sel, *prevsel;
 	int32_t isoverview;
 	int32_t is_in_hotarea;
@@ -2275,6 +2277,19 @@ static void iter_layer_scene_buffers(struct wlr_scene_buffer *buffer,
 	}
 }
 
+void layer_flush_blur_background(LayerSurface *l) {
+	if (!blur)
+		return;
+
+	// 如果背景层发生变化,标记优化的模糊背景缓存需要更新
+	if (l->layer_surface->current.layer ==
+		ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND) {
+		if (l->mon) {
+			wlr_scene_optimized_blur_mark_dirty(l->mon->blur);
+		}
+	}
+}
+
 void maplayersurfacenotify(struct wl_listener *listener, void *data) {
 	LayerSurface *l = wl_container_of(listener, l, map);
 	struct wlr_layer_surface_v1 *layer_surface = l->layer_surface;
@@ -2402,15 +2417,7 @@ void commitlayersurfacenotify(struct wl_listener *listener, void *data) {
 		}
 	}
 
-	if (blur) {
-		// 如果背景层发生变化,标记优化的模糊背景缓存需要更新
-		if (layer_surface->current.layer ==
-			ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND) {
-			if (l->mon) {
-				wlr_scene_optimized_blur_mark_dirty(l->mon->blur);
-			}
-		}
-	}
+	layer_flush_blur_background(l);
 
 	if (layer_surface == exclusive_focus &&
 		layer_surface->current.keyboard_interactive !=
@@ -5090,9 +5097,15 @@ void setmon(Client *c, Monitor *m, uint32_t newtags, bool focus) {
 		/* Make sure window actually overlaps with the monitor */
 		reset_foreign_tolevel(c);
 		resize(c, c->geom, 0);
-		c->tags =
-			newtags ? newtags
-					: m->tagset[m->seltags]; /* assign tags of target monitor */
+		if (!newtags && !m->isoverview) {
+			c->tags = m->tagset[m->seltags];
+		} else if (!newtags && m->isoverview) {
+			c->tags = m->ovbk_current_tagset;
+		} else if (newtags) {
+			c->tags = newtags;
+		} else {
+			c->tags = m->tagset[m->seltags];
+		}
 		setfloating(c, c->isfloating);
 		setfullscreen(c, c->isfullscreen); /* This will call arrange(c->mon) */
 	}
@@ -5643,6 +5656,7 @@ void unmaplayersurfacenotify(struct wl_listener *listener, void *data) {
 		focusclient(focustop(selmon), 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 	l->being_unmapped = false;
+	layer_flush_blur_background(l);
 	wlr_scene_node_destroy(&l->shadow->node);
 	l->shadow = NULL;
 }
